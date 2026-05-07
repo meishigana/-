@@ -111,6 +111,12 @@ const handleApi = async (req, res) => {
       return;
     }
     const site = sanitizeSite(await readJsonBody(req));
+    try {
+      const current = await fs.readFile(dataFile, "utf8");
+      await fs.writeFile(`${dataFile}.bak`, current, "utf8");
+    } catch {
+      // The first save may happen before a backup exists.
+    }
     await fs.writeFile(dataFile, `${JSON.stringify(site, null, 2)}\n`, "utf8");
     send(res, 200, JSON.stringify({ ok: true }));
     return;
