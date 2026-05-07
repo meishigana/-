@@ -53,6 +53,27 @@ git push -u origin main
 
 推送后在 GitHub 仓库的 `Settings -> Pages` 中选择 `Deploy from a branch`，分支选择 `main`，目录选择 `/root`。
 
+## 管理员模式
+
+`admin.html` 需要配合 `server.js` 才能保存修改。纯 GitHub Pages 只能展示博客，不能安全地保存后台编辑。
+
+本地或服务器启动：
+
+```powershell
+$env:ADMIN_PASSWORD="换成你的强密码"
+node server.js
+```
+
+然后访问：
+
+```text
+http://服务器IP:8080/admin.html
+```
+
+管理员保存的数据会写入 `data/site.json`，访客访问首页、关于页和文章页时会自动读取这些信息。
+
+生产部署建议放在 Nginx 后面，并开启 HTTPS。不要把 `ADMIN_PASSWORD` 写进仓库文件，使用系统环境变量或进程管理器配置。
+
 ## 自定义域名
 
 如果有域名，需要提供域名值，例如 `blog.example.com`。GitHub Pages 通常需要：

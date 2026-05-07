@@ -12,8 +12,8 @@
       <a class="brand" href="index.html">
         <span class="brand-mark">SS</span>
         <span>
-          <strong>suancai_soup</strong>
-          <small>Security & Notes</small>
+          <strong data-site-brand>suancai_soup</strong>
+          <small data-site-tagline>Security & Notes</small>
         </span>
       </a>
       <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
@@ -31,10 +31,10 @@
       <section class="page-title">
         <p class="eyebrow">About</p>
         <h1>关于这个博客</h1>
-        <p>这是 suancai_soup 的个人博客框架。当前内容已清空，等待后续补充真实文章、介绍和联系方式。</p>
+        <p data-site-field="aboutIntro">这是 suancai_soup 的个人博客框架。当前内容已清空，等待后续补充真实文章、介绍和联系方式。</p>
       </section>
 
-      <section class="about-grid">
+      <section class="about-grid" data-site-list="aboutCards">
         <article class="about-card">
           <h2>内容状态</h2>
           <p>暂无公开文章。后续会根据实际内容再补充分类、标签和归档。</p>
@@ -49,7 +49,7 @@
         </article>
       </section>
 
-      <section class="timeline">
+      <section class="timeline" data-site-list="timeline">
         <h2>内容路线</h2>
         <div class="timeline-item">
           <span>01</span>
@@ -77,8 +77,9 @@
 
     <footer class="site-footer">
       <span>© 2026 suancai_soup</span>
-      <span>Contact: 待补充</span>
+      <span>Contact: <span data-site-field="contactText">待补充</span></span>
     </footer>
+    <script src="assets/js/site-data.js"></script>
     <script src="assets/js/main.js"></script>
   </body>
 </html>

@@ -12,8 +12,8 @@
       <a class="brand" href="index.html" aria-label="suancai_soup 首页">
         <span class="brand-mark">SS</span>
         <span>
-          <strong>suancai_soup</strong>
-          <small>Security & Notes</small>
+          <strong data-site-brand>suancai_soup</strong>
+          <small data-site-tagline>Security & Notes</small>
         </span>
       </a>
       <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
@@ -32,9 +32,9 @@
     <main>
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Personal Blog</p>
-          <h1>suancai_soup 的个人博客。</h1>
-          <p class="hero-text">
+          <p class="eyebrow" data-site-field="heroEyebrow">Personal Blog</p>
+          <h1 data-site-field="heroTitle">suancai_soup 的个人博客。</h1>
+          <p class="hero-text" data-site-field="heroText">
             用来整理比赛记录、技术笔记和后续文章。目前已发布一篇 NCTF 比赛 write up 整合记录。
           </p>
           <div class="hero-actions">
@@ -98,9 +98,9 @@
         <aside class="side-column" aria-label="侧边信息">
           <section class="profile-card">
             <img src="assets/img/avatar.svg" alt="博客头像">
-            <h2>suancai_soup</h2>
-            <p>个人介绍待补充。这里会放置作者简介、联系方式和公开链接。</p>
-            <div class="social-links">
+            <h2 data-site-field="profileName">suancai_soup</h2>
+            <p data-site-field="profileBio">个人介绍待补充。这里会放置作者简介、联系方式和公开链接。</p>
+            <div class="social-links" data-site-list="links">
               <a href="about.html">About</a>
               <a href="archive.html">Archive</a>
             </div>
@@ -108,7 +108,7 @@
 
           <section class="topic-card">
             <h2>Categories</h2>
-            <div class="tags">
+            <div class="tags" data-site-list="categories">
               <a href="archive.html">待补充</a>
               <a href="archive.html">待补充</a>
               <a href="archive.html">待补充</a>
@@ -132,6 +132,7 @@
       <span>views | visitors | 28,989 chars | 32 mins.</span>
     </footer>
 
+    <script src="assets/js/site-data.js"></script>
     <script src="assets/js/main.js"></script>
   </body>
 </html>

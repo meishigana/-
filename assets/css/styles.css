@@ -591,6 +591,74 @@ code {
   cursor: pointer;
 }
 
+.admin-shell {
+  max-width: 920px;
+}
+
+.admin-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(17, 26, 34, 0.82);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  margin-bottom: 18px;
+}
+
+.admin-panel.hidden {
+  display: none;
+}
+
+.admin-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.admin-form {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.admin-form input,
+.admin-form textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #07100f;
+  color: var(--text);
+  padding: 11px 12px;
+  font: inherit;
+}
+
+.admin-form textarea {
+  resize: vertical;
+}
+
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.admin-message {
+  color: var(--accent);
+  min-height: 1.5em;
+}
+
+.admin-message.error {
+  color: var(--danger);
+}
+
 .site-footer {
   display: flex;
   justify-content: space-between;

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>管理员 | suancai_soup</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">SS</span>
+        <span>
+          <strong>suancai_soup</strong>
+          <small>Admin</small>
+        </span>
+      </a>
+      <nav class="site-nav">
+        <a href="index.html">返回博客</a>
+      </nav>
+    </header>
+
+    <main class="page-shell admin-shell">
+      <section class="page-title">
+        <p class="eyebrow">Admin</p>
+        <h1>站点信息管理</h1>
+        <p>登录后可以直接修改博客标题、简介、关于页和侧边栏信息。访客不会看到这个管理界面。</p>
+      </section>
+
+      <section class="admin-panel" id="login-panel">
+        <h2>登录</h2>
+        <form id="login-form" class="admin-form">
+          <label>
+            管理员密码
+            <input type="password" name="password" autocomplete="current-password" required>
+          </label>
+          <button class="button primary" type="submit">登录</button>
+        </form>
+      </section>
+
+      <section class="admin-panel hidden" id="editor-panel">
+        <div class="admin-topline">
+          <h2>编辑内容</h2>
+          <button class="button secondary" type="button" id="logout-button">退出</button>
+        </div>
+        <form id="site-form" class="admin-form">
+          <label>
+            站点名称
+            <input name="siteName" required>
+          </label>
+          <label>
+            副标题
+            <input name="tagline" required>
+          </label>
+          <label>
+            首页标记
+            <input name="heroEyebrow">
+          </label>
+          <label>
+            首页标题
+            <input name="heroTitle">
+          </label>
+          <label>
+            首页简介
+            <textarea name="heroText" rows="3"></textarea>
+          </label>
+          <label>
+            侧边栏名称
+            <input name="profileName">
+          </label>
+          <label>
+            侧边栏简介
+            <textarea name="profileBio" rows="3"></textarea>
+          </label>
+          <label>
+            关于页简介
+            <textarea name="aboutIntro" rows="4"></textarea>
+          </label>
+          <label>
+            联系方式
+            <input name="contactText">
+          </label>
+          <label>
+            分类，逗号分隔
+            <input name="categories">
+          </label>
+          <label>
+            链接，每行一个，格式：名称|地址
+            <textarea name="links" rows="4"></textarea>
+          </label>
+          <label>
+            关于页卡片 JSON
+            <textarea name="aboutCards" rows="8" spellcheck="false"></textarea>
+          </label>
+          <label>
+            内容路线 JSON
+            <textarea name="timeline" rows="8" spellcheck="false"></textarea>
+          </label>
+          <div class="admin-actions">
+            <button class="button primary" type="submit">保存</button>
+            <button class="button secondary" type="button" id="reload-button">重新载入</button>
+          </div>
+        </form>
+      </section>
+
+      <p class="admin-message" id="admin-message" role="status"></p>
+    </main>
+
+    <script src="assets/js/admin.js"></script>
+  </body>
+</html>
