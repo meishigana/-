@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="NCTF ?? write up ?????">
-    <title>NCTF???? | suancai_soup</title>
+    <meta name="description" content="NCTF 比赛 write up 整合记录。">
+    <title>NCTF比赛记录 | suancai_soup</title>
     <link rel="stylesheet" href="../assets/css/styles.css">
   </head>
   <body>
@@ -14,15 +14,15 @@
         <span><strong>suancai_soup</strong><small>Security & Notes</small></span>
       </a>
       <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span></span><span></span><span></span></button>
-      <nav class="site-nav" id="site-nav"><a href="../index.html">??</a><a href="../archive.html">??</a><a href="../about.html">??</a><a href="../rss.xml">RSS</a></nav>
+      <nav class="site-nav" id="site-nav"><a href="../index.html">首页</a><a href="../archive.html">归档</a><a href="../about.html">关于</a><a href="../rss.xml">RSS</a></nav>
     </header>
 
     <main class="article-shell">
       <article class="article">
         <header class="article-header">
-          <div class="post-meta"><span>NCTF????</span><time datetime="2026-05-07">2026-05-07 ? 28,989 chars ? 32 mins.</time></div>
-          <h1>NCTF????</h1>
-          <p>????? <code>E:\ctf\NCTF</code> ?????? write up ? Markdown ??????????????????? payload??????????????????????????</p>
+          <div class="post-meta"><span>NCTF比赛记录</span><time datetime="2026-05-07">2026-05-07 · 28,989 chars · 32 mins.</time></div>
+          <h1>NCTF比赛记录</h1>
+          <p>本文整合自 <code>E:\ctf\NCTF</code> 下明确标记为 write up 的 Markdown 文件，按题目分节保留真实解题过程、关键 payload、脚本思路和结果记录；标题完全相同的文件只保留一份。</p>
         </header>
 
         <div class="article-toc">
@@ -35,20 +35,19 @@
         </div>
 
         <section>
-          <h2>????</h2>
+          <h2>整合来源</h2>
           <ul>
-            <li>ezheap WP?<code>ezheap_wp.md</code></li>
-            <li>HORSE?<code>WP_horse.md</code></li>
-            <li>NCTF 2026 OpenShell Writeup?<code>WP_OpenShell.md</code></li>
-            <li>What another mess! WP?<code>What_another_mess_wp.md</code></li>
-            <li>server 47768 WP?<code>wp_47768.md</code></li>
-            <li>鸡爪流高手 WP?<code>鸡爪流高手-WP.md</code></li>
+            <li>ezheap WP：<code>ezheap_wp.md</code></li>
+            <li>HORSE：<code>WP_horse.md</code></li>
+            <li>NCTF 2026 OpenShell Writeup：<code>WP_OpenShell.md</code></li>
+            <li>What another mess! WP：<code>What_another_mess_wp.md</code></li>
+            <li>server 47768 WP：<code>wp_47768.md</code></li>
+            <li>鸡爪流高手 WP：<code>鸡爪流高手-WP.md</code></li>
           </ul>
         </section>
 
         <section class="wp-section">
           <h2 id="ezheap-wp">ezheap WP</h2>
-<h2 id="ezheap-wp-2">ezheap WP</h2>
 <h3 id="题目信息">题目信息</h3>
 <ul>
 <li>题目名：<code>ezheap</code></li>
@@ -538,7 +537,6 @@ OOB tcache entry
 
         <section class="wp-section">
           <h2 id="nctf-2026-openshell-writeup">NCTF 2026 OpenShell Writeup</h2>
-<h2 id="nctf-2026-openshell-writeup-2">NCTF 2026 OpenShell Writeup</h2>
 <h3 id="题目信息-2">题目信息</h3>
 <ul>
 <li>题目：<code>OpenShell</code></li>
@@ -762,7 +760,6 @@ Content-Type: application/json
 
         <section class="wp-section">
           <h2 id="what-another-mess-wp">What another mess! WP</h2>
-<h2 id="what-another-mess-wp-2">What another mess! WP</h2>
 <h3 id="题目信息-3">题目信息</h3>
 <ul>
 <li>题目类型：Misc</li>
@@ -1042,7 +1039,6 @@ Q5 = 1924</code></pre>
 
         <section class="wp-section">
           <h2 id="server-47768-wp">server 47768 WP</h2>
-<h2 id="server-47768-wp-2">server 47768 WP</h2>
 <h3 id="结论-2">结论</h3>
 <p>这题的目标不是正常刷分到榜一，而是利用评分更新里的有符号/无符号混用，把 <code>player.score</code> 写成超大正数，再用 <code>cmd=1</code> 领奖。</p>
 <p>新远端 <code>114.66.24.221:47768</code> 可复现拿到：</p>
@@ -1151,7 +1147,6 @@ L 7   -&gt; -1   -&gt; 写库后变成 4294967295</code></pre>
 
         <section class="wp-section">
           <h2 id="鸡爪流高手-wp">鸡爪流高手 WP</h2>
-<h2 id="鸡爪流高手-wp-2">鸡爪流高手 WP</h2>
 <h3 id="题目信息-4">题目信息</h3>
 <ul>
 <li>题目类型：RE</li>
@@ -1346,7 +1341,7 @@ else
       </article>
     </main>
 
-    <footer class="site-footer"><span>? 2026 suancai_soup</span><a href="../archive.html">????</a></footer>
+    <footer class="site-footer"><span>© 2026 suancai_soup</span><a href="../archive.html">返回归档</a></footer>
     <script src="../assets/js/main.js"></script>
   </body>
 </html>
