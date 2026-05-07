@@ -8,10 +8,21 @@ const dataFile = path.join(root, "data", "site.json");
 const port = Number(process.env.PORT || 8080);
 const host = process.env.HOST || "127.0.0.1";
 const adminPassword = process.env.ADMIN_PASSWORD;
+const adminPath = process.env.ADMIN_PATH || "/admin.html";
+const adminKey = crypto.createHash("sha256").update(adminPath).digest("hex").slice(0, 24);
 const sessions = new Map();
+const loginFailures = new Map();
+const sessionTtlMs = 30 * 60 * 1000;
+const lockWindowMs = 15 * 60 * 1000;
+const maxFailures = 5;
 
 if (!adminPassword) {
   console.error("ADMIN_PASSWORD is required before starting the admin server.");
+  process.exit(1);
+}
+
+if (!adminPath.startsWith("/") || adminPath === "/admin.html" || !adminPath.endsWith(".html")) {
+  console.error("ADMIN_PATH must be a non-default hidden .html path, for example /manage-long-random-name.html");
   process.exit(1);
 }
 
@@ -55,7 +66,54 @@ const getToken = (req) => {
   return header.startsWith("Bearer ") ? header.slice(7) : "";
 };
 
-const isAuthed = (req) => sessions.has(getToken(req));
+const isAdminRequest = (req) => req.headers["x-admin-key"] === adminKey;
+
+const getClientIp = (req) => {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress || "unknown";
+};
+
+const getFailureState = (ip) => {
+  const now = Date.now();
+  const state = loginFailures.get(ip);
+  if (!state || now - state.firstAt > lockWindowMs) {
+    return { count: 0, firstAt: now, lockedUntil: 0 };
+  }
+  return state;
+};
+
+const recordLoginFailure = (ip) => {
+  const now = Date.now();
+  const state = getFailureState(ip);
+  state.count += 1;
+  state.firstAt ||= now;
+  if (state.count >= maxFailures) {
+    state.lockedUntil = now + lockWindowMs;
+  }
+  loginFailures.set(ip, state);
+};
+
+const isLocked = (ip) => {
+  const state = getFailureState(ip);
+  return state.lockedUntil && Date.now() < state.lockedUntil;
+};
+
+const isAuthed = (req) => {
+  const token = getToken(req);
+  const createdAt = sessions.get(token);
+  if (!createdAt) {
+    return false;
+  }
+  if (Date.now() - createdAt > sessionTtlMs) {
+    sessions.delete(token);
+    return false;
+  }
+  sessions.set(token, Date.now());
+  return true;
+};
 
 const sanitizeSite = (site) => ({
   siteName: String(site.siteName || "suancai_soup").slice(0, 80),
@@ -84,14 +142,27 @@ const sanitizeSite = (site) => ({
 });
 
 const handleApi = async (req, res) => {
+  if (!isAdminRequest(req)) {
+    send(res, 404, JSON.stringify({ error: "not found" }));
+    return;
+  }
+
   if (req.url === "/api/login" && req.method === "POST") {
+    const ip = getClientIp(req);
+    if (isLocked(ip)) {
+      send(res, 429, JSON.stringify({ error: "too many login attempts" }));
+      return;
+    }
+
     const body = await readJsonBody(req);
     if (body.password !== adminPassword) {
+      recordLoginFailure(ip);
       send(res, 401, JSON.stringify({ error: "invalid password" }));
       return;
     }
     const token = crypto.randomBytes(32).toString("hex");
     sessions.set(token, Date.now());
+    loginFailures.delete(ip);
     send(res, 200, JSON.stringify({ token }));
     return;
   }
@@ -127,7 +198,12 @@ const handleApi = async (req, res) => {
 
 const serveStatic = async (req, res) => {
   const urlPath = decodeURIComponent(req.url.split("?")[0]);
-  const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+  if (urlPath === "/admin.html") {
+    send(res, 404, "not found", "text/plain; charset=utf-8");
+    return;
+  }
+
+  const rel = urlPath === adminPath ? "admin.html" : (urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, ""));
   const target = path.resolve(root, rel);
 
   if (!target.startsWith(root)) {
@@ -138,6 +214,11 @@ const serveStatic = async (req, res) => {
   try {
     const data = await fs.readFile(target);
     const type = types[path.extname(target).toLowerCase()] || "application/octet-stream";
+    if (urlPath === adminPath && type.startsWith("text/html")) {
+      res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
+      res.end(data.toString("utf8").replace("__ADMIN_KEY__", adminKey));
+      return;
+    }
     res.writeHead(200, { "Content-Type": type });
     res.end(data);
   } catch {

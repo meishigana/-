@@ -7,6 +7,7 @@ const reloadButton = document.querySelector("#reload-button");
 const logoutButton = document.querySelector("#logout-button");
 
 let token = localStorage.getItem("blogAdminToken") || "";
+const adminKey = window.__ADMIN_KEY__ || "";
 
 const showMessage = (text, isError = false) => {
   message.textContent = text;
@@ -15,6 +16,7 @@ const showMessage = (text, isError = false) => {
 
 const headers = () => ({
   "Content-Type": "application/json",
+  "X-Admin-Key": adminKey,
   Authorization: `Bearer ${token}`,
 });
 
@@ -79,9 +81,14 @@ loginForm.addEventListener("submit", async (event) => {
   const password = new FormData(loginForm).get("password");
   const response = await fetch("/api/login", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
     body: JSON.stringify({ password }),
   });
+
+  if (response.status === 429) {
+    showMessage("登录失败次数过多，请稍后再试。", true);
+    return;
+  }
 
   if (!response.ok) {
     showMessage("登录失败，请检查管理员密码。", true);

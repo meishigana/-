@@ -62,18 +62,26 @@ git push -u origin main
 ```powershell
 $env:ADMIN_PASSWORD="换成你的强密码"
 $env:HOST="127.0.0.1"
+$env:ADMIN_PATH="/manage-换成一串随机字符.html"
 node server.js
 ```
 
 然后访问：
 
 ```text
-http://服务器IP:8080/admin.html
+http://服务器IP:8080/manage-换成一串随机字符.html
 ```
 
 管理员保存的数据会写入 `data/site.json`，访客访问首页、关于页和文章页时会自动读取这些信息。
 
-生产部署建议放在 Nginx 后面，并开启 HTTPS。不要把 `ADMIN_PASSWORD` 写进仓库文件，使用系统环境变量或进程管理器配置。
+安全策略：
+
+- 默认 `/admin.html` 会返回 404。
+- 真实管理路径由 `ADMIN_PATH` 环境变量控制，请使用难猜的随机路径。
+- 登录失败 5 次会锁定 15 分钟。
+- 管理会话 30 分钟过期。
+- 生产部署建议放在 Nginx 后面，并开启 HTTPS。
+- 不要把 `ADMIN_PASSWORD` 或 `ADMIN_PATH` 写进仓库文件，使用系统环境变量或进程管理器配置。
 
 ## 自定义域名
 
