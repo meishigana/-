@@ -6,6 +6,7 @@ const path = require("path");
 const root = __dirname;
 const dataFile = path.join(root, "data", "site.json");
 const port = Number(process.env.PORT || 8080);
+const host = process.env.HOST || "127.0.0.1";
 const adminPassword = process.env.ADMIN_PASSWORD;
 const sessions = new Map();
 
@@ -150,6 +151,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "0.0.0.0", () => {
-  console.log(`suancai_soup blog server listening on http://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`suancai_soup blog server listening on http://${host}:${port}`);
 });

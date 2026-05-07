@@ -61,6 +61,7 @@ git push -u origin main
 
 ```powershell
 $env:ADMIN_PASSWORD="换成你的强密码"
+$env:HOST="127.0.0.1"
 node server.js
 ```
 
